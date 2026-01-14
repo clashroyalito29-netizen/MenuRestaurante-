@@ -39,12 +39,16 @@ function Home() {
 function AdminPanel() {
   const [mesas, setMesas] = useState<any[]>([]);
   const [pedidos, setPedidos] = useState<any[]>([]);
+  const [filtroEstado, setFiltroEstado] = useState('TODOS');
 
   useEffect(() => {
     fetchAdminData();
-    // Suscripción en tiempo real para nuevos pedidos
-    const channel = supabase.channel('cambios-restaurante')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'pedidos' }, fetchAdminData)
+    // Suscripción Realtime: Escucha CUALQUIER cambio en la base de datos
+    const channel = supabase.channel('dashboard-admin')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'pedidos' }, () => {
+        fetchAdminData();
+        reproducirAlerta(); // Sonido para avisar al mozo
+      })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'mesas' }, fetchAdminData)
       .subscribe();
 
@@ -58,47 +62,91 @@ function AdminPanel() {
     setPedidos(resPedidos.data || []);
   }
 
-  async function cambiarEstadoMesa(id: number, estadoActual: string) {
-    const nuevoEstado = estadoActual === 'LIBRE' ? 'OCUPADA' : 'LIBRE';
-    await supabase.from('mesas').update({ estado: nuevoEstado }).eq('id', id);
+  // Cambiar el estado del pedido (Pendiente -> Preparando -> Entregado)
+  async function actualizarPedido(id: number, nuevoEstado: string) {
+    await supabase.from('pedidos').update({ estado: nuevoEstado }).eq('id', id);
+    fetchAdminData();
   }
+
+  function reproducirAlerta() {
+    const audio = new Audio('https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3');
+    audio.play().catch(() => console.log("Interacción requerida para audio"));
+  }
+
+  // Filtramos pedidos según lo que el mozo necesite ver
+  const pedidosFiltrados = filtroEstado === 'TODOS' 
+    ? pedidos 
+    : pedidos.filter(p => p.estado === filtroEstado);
 
   return (
     <div className="admin-container">
       <header className="admin-header">
-        <h2>Panel de Control 🛠️</h2>
-        <Link to="/" className="btn-volver">Cerrar Sesión</Link>
+        <h2>Dashboard Operativo 🛠️</h2>
+        <div className="admin-stats">
+          <span>Pedidos hoy: {pedidos.length}</span>
+        </div>
       </header>
 
-      <section>
-        <h3>Estado de Mesas (Anti-Spam)</h3>
+      {/* Gestión de Mesas (Ya lo tenemos, se mantiene igual) */}
+      <section className="admin-section">
+        <h3>Control de Mesas (Anti-Spam)</h3>
         <div className="mesa-grid">
           {mesas.map(m => (
             <div key={m.id} className={`mesa-card ${m.estado}`}>
               <h4>Mesa {m.numero_mesa}</h4>
-              <p>{m.estado}</p>
-              <button onClick={() => cambiarEstadoMesa(m.id, m.estado)}>
-                {m.estado === 'LIBRE' ? 'Habilitar QR' : 'Cerrar Mesa'}
+              <button className="btn-mesa-toggle" onClick={() => cambiarEstadoMesa(m.id, m.estado)}>
+                {m.estado === 'LIBRE' ? 'Abrir Mesa' : 'Cerrar Mesa'}
               </button>
             </div>
           ))}
         </div>
       </section>
+                {/* Filtros de Gestión */}
+      <div className="admin-filters">
+        <button className={filtroEstado === 'TODOS' ? 'active' : ''} onClick={() => setFiltroEstado('TODOS')}>Todos</button>
+        <button className={filtroEstado === 'PENDIENTE' ? 'active' : ''} onClick={() => setFiltroEstado('PENDIENTE')}>Pendientes</button>
+        <button className={filtroEstado === 'ENTREGADO' ? 'active' : ''} onClick={() => setFiltroEstado('ENTREGADO')}>Entregados</button>
+      </div>
 
-      <section style={{ marginTop: '40px' }}>
-        <h3>Pedidos Recientes</h3>
-        <div className="pedidos-list">
-          {pedidos.map(p => (
-            <div key={p.id} className="pedido-item">
-              <span>Mesa {p.mesa_id} - <strong>${p.total}</strong></span>
-              <span className={`status-${p.estado}`}>{p.estado}</span>
+      <section className="pedidos-section">
+        <h3>Comandas Activas</h3>
+        <div className="pedidos-grid">
+          {pedidosFiltrados.map(p => (
+            <div key={p.id} className={`pedido-card status-${p.estado}`}>
+              <div className="pedido-header">
+                <span className="pedido-mesa">Mesa #{p.mesa_id}</span>
+                <span className="pedido-hora">{new Date(p.creado_at).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>
+              </div>
+              
+              <div className="pedido-items">
+                {p.items?.map((item: any, index: number) => (
+                  <div key={index} className="item-detalle">
+                    <span>{item.nombre}</span>
+                    <span className="item-precio">${item.precio}</span>
+                  </div>
+                ))}
+              </div>
+
+              <div className="pedido-footer">
+                <div className="pedido-total">Total: <strong>${p.total}</strong></div>
+                <div className="pedido-acciones">
+                  {p.estado === 'PENDIENTE' && (
+                    <button className="btn-preparar" onClick={() => actualizarPedido(p.id, 'PREPARANDO')}>Empezar</button>
+                  )}
+                  {p.estado === 'PREPARANDO' && (
+                    <button className="btn-entregar" onClick={() => actualizarPedido(p.id, 'ENTREGADO')}>Entregar</button>
+                  )}
+                  <span className="estado-badge">{p.estado}</span>
+                </div>
+              </div>
             </div>
           ))}
         </div>
       </section>
     </div>
   );
-}
+                                                                                     }
+
 // --- COMPONENTE: MENÚ DEL CLIENTE ---
 function MenuCliente() {
   const { idMesa } = useParams();
